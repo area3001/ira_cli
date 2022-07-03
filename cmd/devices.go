@@ -1,25 +1,31 @@
-/*
-Copyright © 2022 NAME HERE <EMAIL ADDRESS>
-
-*/
 package cmd
 
 import (
-	"bufio"
-	"github.com/area3001/goira/comm"
+	"fmt"
+	"github.com/area3001/goira/core"
 	"github.com/area3001/goira/sdk"
-	"github.com/nats-io/nats.go"
+	"github.com/logrusorgru/aurora/v3"
+	"github.com/mergestat/timediff"
+	"github.com/olekukonko/tablewriter"
 	"github.com/spf13/cobra"
-	"io"
 	"log"
 	"os"
+	"strconv"
 )
 
-// devicesCmd represents the devices command
 var devicesCmd = &cobra.Command{
 	Use:   "devices",
 	Short: "IRA device management",
 	Long:  `Manage ira devices`,
+}
+
+var forgetCmd = &cobra.Command{
+	Use:   "forget <device>",
+	Short: "Forget the device",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return client.Devices.Forget(args[0])
+	},
 }
 
 var configCmd = &cobra.Command{
@@ -27,59 +33,120 @@ var configCmd = &cobra.Command{
 	Short: "Configure the IRA device",
 }
 
-var configSetCmd = &cobra.Command{
-	Use:   "set device parameter value",
-	Short: "read raw bytes sent as packets from stdin and send them to rgb",
-	Args:  cobra.ExactArgs(3),
-	Run: func(cmd *cobra.Command, args []string) {
-		client, err := sdk.NewClient(&comm.NatsClientOpts{
-			Root:             "area3001",
-			NatsUrl:          server,
-			NatsOptions:      []nats.Option{},
-			JetStreamOptions: []nats.JSOpt{},
+var confModeCmd = &cobra.Command{
+	Use:   "mode <device> <target_mode>",
+	Short: "Set the device mode",
+	Args:  cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		targetMode, err := strconv.Atoi(args[1])
+		if err != nil {
+			log.Fatalln("invalid target mode format")
+		}
+
+		if targetMode < 0 || targetMode >= len(core.Modes) {
+			log.Fatalln("target mode out of bounds")
+		}
+
+		mode := core.Modes[targetMode]
+
+		devs, err := client.Devices.Select(args[0])
+		if err != nil {
+			log.Panicln(aurora.Red(err))
+		}
+
+		devs.Perform(func(dev *sdk.Device) {
+			fmt.Print(dev.Meta.MAC, " ... ")
+
+			if err := dev.SetMode(mode); err != nil {
+				fmt.Println(aurora.Red(err.Error()))
+				return
+			}
+
+			fmt.Println(aurora.Green("OK"))
 		})
 
+		_ = client.Devices.Sync()
+		return nil
+	},
+}
+
+var configSetCmd = &cobra.Command{
+	Use:   "set <device> <parameter> <value>",
+	Short: "Set a parameter for a device",
+	Args:  cobra.ExactArgs(3),
+	Run: func(cmd *cobra.Command, args []string) {
 		dev, err := client.Devices.Device(args[0])
 		if err != nil {
 			log.Panicln(err)
 		}
 
-		reader := bufio.NewReader(os.Stdin)
-		finish := false
-		for finish {
-			packet, err := reader.ReadBytes('\n')
-			if err != nil {
-				if err == io.EOF {
-					finish = true
-				} else {
-					log.Panic(err)
-				}
-			}
-
-			if len(packet) <= 4 {
-				log.Printf("Invalid packet length: %d\n", len(packet))
-				continue
-			}
-
-			// -- send the packet
-			if err := dev.SendRgb(packet); err != nil {
-				log.Println(err)
-			}
+		if err := dev.SetConfig(args[1], args[2]); err != nil {
+			log.Panicln(err)
 		}
 	},
 }
 
+var syncCmd = &cobra.Command{
+	Use:   "sync",
+	Short: "Ask all devices to sync",
+	Run: func(cmd *cobra.Command, args []string) {
+		if err := client.Devices.Sync(); err != nil {
+			log.Panicln(err)
+		}
+	},
+}
+
+var deviceShowCmd = &cobra.Command{
+	Use:   "show <device>",
+	Short: "show the device details",
+	Run: func(cmd *cobra.Command, args []string) {
+		devs, err := client.Devices.List()
+		if err != nil {
+			log.Panicln(err)
+		}
+
+		table := tablewriter.NewWriter(os.Stdout)
+		table.SetHeader([]string{"Mac", "Mode", "Last Seen"})
+
+		for _, v := range devs {
+			if v.Meta == nil {
+				continue
+			}
+
+			table.Append([]string{v.Meta.MAC, v.Meta.Mode, timediff.TimeDiff(v.Meta.LastBeat)})
+		}
+		table.Render()
+	},
+}
+
+var deviceListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "list the devices",
+	Long:  `List the devices showing their MAC, Mode and when they were last seen`,
+	Run: func(cmd *cobra.Command, args []string) {
+		devs, err := client.Devices.List()
+		if err != nil {
+			log.Panicln(err)
+		}
+
+		table := tablewriter.NewWriter(os.Stdout)
+		table.SetHeader([]string{"Mac", "Mode", "Last Seen"})
+
+		for _, v := range devs {
+			if v.Meta == nil {
+				continue
+			}
+
+			table.Append([]string{v.Meta.MAC, v.Meta.Mode, timediff.TimeDiff(v.Meta.LastBeat)})
+		}
+		table.Render()
+	},
+}
+
 func init() {
-	devicesCmd.AddCommand(configCmd)
+	configCmd.AddCommand(configSetCmd, confModeCmd)
+
+	devicesCmd.AddCommand(configCmd, deviceListCmd, syncCmd, forgetCmd)
+
 	rootCmd.AddCommand(devicesCmd)
-
-	// Here you will define your flags and configuration settings.
-
-	// Cobra supports Persistent Flags which will work for this command
-	// and all subcommands, e.g.:
-	// devicesCmd.PersistentFlags().String("foo", "", "A help for foo")
-
-	// Cobra supports local flags which will only run when this command
-	// is called directly, e.g.:
-	// devicesCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
 }

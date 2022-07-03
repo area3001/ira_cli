@@ -1,11 +1,10 @@
-/*
-Copyright © 2022 NAME HERE <EMAIL ADDRESS>
-
-*/
 package cmd
 
 import (
 	"fmt"
+	"github.com/area3001/goira/comm"
+	"github.com/area3001/goira/sdk"
+	"github.com/nats-io/nats.go"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -16,18 +15,30 @@ var cfgFile string
 
 var (
 	server string
-	device string
 	times  int
+	output string
+
+	client *sdk.Client
 )
 
-// rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
 	Use:   "goira",
 	Short: "Manage IRA devices",
 	Long:  `Manage Interactive Research Apparatus'.`,
-	// Uncomment the following line if your bare application
-	// has an action associated with it:
-	// Run: func(cmd *cobra.Command, args []string) { },
+	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		c, err := sdk.NewClient(&comm.NatsClientOpts{
+			Root:             "area3001",
+			NatsUrl:          server,
+			NatsOptions:      []nats.Option{},
+			JetStreamOptions: []nats.JSOpt{},
+		})
+
+		if err == nil {
+			client = c
+		}
+
+		return err
+	},
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
@@ -43,7 +54,8 @@ func init() {
 	cobra.OnInitialize(initConfig)
 
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.goira-cli.yaml)")
-	rootCmd.PersistentFlags().StringVarP(&server, "server", "s", "tcp://51.15.194.130:4222", "The server to connect to")
+	rootCmd.PersistentFlags().StringVarP(&server, "server", "s", "nats://51.15.194.130:4222", "The server to connect to")
+	rootCmd.PersistentFlags().StringVarP(&output, "output", "o", "human", "The output format: human, json")
 
 	viper.BindPFlag("server", rootCmd.PersistentFlags().Lookup("server"))
 }

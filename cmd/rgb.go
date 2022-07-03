@@ -1,24 +1,17 @@
-/*
-Copyright © 2022 NAME HERE <EMAIL ADDRESS>
-
-*/
 package cmd
 
 import (
 	"bufio"
-	"bytes"
-	"encoding/binary"
-	"encoding/hex"
-	"github.com/area3001/goira/comm"
+	"fmt"
+	"github.com/area3001/goira/core"
 	"github.com/area3001/goira/sdk"
-	"github.com/nats-io/nats.go"
+	"github.com/logrusorgru/aurora/v3"
 	"github.com/spf13/cobra"
+	"image/color"
 	"io"
 	"log"
 	"os"
 )
-
-var rgbOffset = 0
 
 var rgbCmd = &cobra.Command{
 	Use:   "rgb",
@@ -26,17 +19,10 @@ var rgbCmd = &cobra.Command{
 }
 
 var rgbRawCmd = &cobra.Command{
-	Use:   "raw device",
+	Use:   "raw <device>",
 	Short: "read raw bytes sent as packets from stdin and send them to rgb",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		client, err := sdk.NewClient(&comm.NatsClientOpts{
-			Root:             "area3001",
-			NatsUrl:          server,
-			NatsOptions:      []nats.Option{},
-			JetStreamOptions: []nats.JSOpt{},
-		})
-
 		dev, err := client.Devices.Device(args[0])
 		if err != nil {
 			log.Panicln(err)
@@ -68,56 +54,45 @@ var rgbRawCmd = &cobra.Command{
 }
 
 var rgbSetCmd = &cobra.Command{
-	Use:   "set [-o offset] device",
+	Use:   "set <device> <hex_color, ...>",
 	Short: "read raw bytes sent as packets from stdin and send them to rgb",
 	Args:  cobra.MinimumNArgs(2),
 	Run: func(cmd *cobra.Command, args []string) {
-		client, err := sdk.NewClient(&comm.NatsClientOpts{
-			Root:             "area3001",
-			NatsUrl:          server,
-			NatsOptions:      []nats.Option{},
-			JetStreamOptions: []nats.JSOpt{},
-		})
+		// -- get the offset
+		offset, _ := cmd.Flags().GetUint16("offset")
 
-		dev, err := client.Devices.Device(args[0])
+		devs, err := client.Devices.Select(args[0])
 		if err != nil {
-			log.Panicln(err)
+			log.Panicln(aurora.Red(err))
 		}
 
-		// -- construct the packet
-		bytesPerPixel := len(args[0])
-		if bytesPerPixel != 6 && bytesPerPixel != 8 {
-			log.Fatalf("wrong number of pixel channels\n")
-		}
-
-		buf := new(bytes.Buffer)
-		binary.Write(buf, binary.LittleEndian, uint16(rgbOffset))
-		binary.Write(buf, binary.LittleEndian, uint16(len(args)))
-
-		for idx, arg := range args {
-			b, err := hex.DecodeString(arg)
-			if err != nil {
-				log.Fatalf("Data %s for pixel %d is invalid: %s\n", arg, idx, err)
+		devs.Perform(func(dev *sdk.Device) {
+			colors := make([]color.RGBA, len(args)-1)
+			for idx, hexColor := range args[1:] {
+				c, err := core.ParseHexColor(hexColor)
+				if err != nil {
+					msg := fmt.Sprintf("unable to parse color %d from %s to a valid color: %v\n", idx+1, hexColor, err)
+					fmt.Println(dev.Meta.MAC, ":\t", aurora.Red("ERR\t"), aurora.Red(msg))
+					continue
+				}
+				colors[idx] = c
 			}
 
-			if len(b) != bytesPerPixel {
-				log.Fatalf("Data %s for pixel %d is invalid: inconsistent number of bytes per pixel", arg, idx)
+			if err := dev.SendRgbPixels(offset, colors); err != nil {
+				fmt.Println(dev.Meta.MAC, ":\t", aurora.Red("ERR\t"), aurora.Red(err.Error()))
+				return
 			}
 
-			buf.Write(b)
-		}
-
-		// -- send the packet
-		if err := dev.SendRgbRaw(buf.Bytes()); err != nil {
-			log.Println(err)
-		}
+			fmt.Println(dev.Meta.MAC, ":\t", aurora.Green("OK"))
+		})
 	},
 }
 
 func init() {
 	rgbCmd.AddCommand(rgbRawCmd)
 
-	rgbSetCmd.LocalFlags().IntVarP(&rgbOffset, "offset", "o", 0, "the pixel offset")
+	rgbSetCmd.LocalFlags().IntP("offset", "o", 0, "the pixel offset")
+
 	rgbCmd.AddCommand(rgbSetCmd)
 
 	rootCmd.AddCommand(rgbCmd)
