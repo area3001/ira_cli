@@ -1,11 +1,16 @@
 package cmd
 
 import (
-	"bufio"
+	"fmt"
+	"github.com/area3001/goira/core"
+	"github.com/area3001/goira/sdk"
+	"github.com/logrusorgru/aurora/v3"
+	"github.com/olekukonko/tablewriter"
 	"github.com/spf13/cobra"
-	"io"
 	"log"
 	"os"
+	"strconv"
+	"strings"
 )
 
 var fxCmd = &cobra.Command{
@@ -13,94 +18,91 @@ var fxCmd = &cobra.Command{
 	Short: "Device Effects control",
 }
 
+var fxEnableCmd = &cobra.Command{
+	Use:   "enable <selector>",
+	Short: "Enable RGB mode for the selected devices",
+	Args:  cobra.MinimumNArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		devs, err := client.Devices.Select(args[0])
+		if err != nil {
+			log.Panicln(aurora.Red(err))
+		}
+
+		devs.Perform(func(dev *sdk.Device) {
+			if err := dev.SetMode(core.Modes[8]); err != nil {
+				fmt.Println(dev.Meta.MAC, ":\t", aurora.Red("ERR\t"), aurora.Red(err.Error()))
+				return
+			}
+
+			fmt.Println(dev.Meta.MAC, ":\t", aurora.Green("OK"))
+		})
+
+		_ = client.Devices.Sync()
+	},
+}
+
 var listFxCmd = &cobra.Command{
 	Use:   "list",
 	Short: "list the available effects with their code",
 	Run: func(cmd *cobra.Command, args []string) {
+		table := tablewriter.NewWriter(os.Stdout)
+		table.SetHeader([]string{"Code", "Name", "Description", "Parameters"})
 
+		for _, v := range core.Effects {
+			params := make([]string, len(v.AllowedParams))
+			for idx, param := range v.AllowedParams {
+				params[idx] = param.Name
+			}
+
+			table.Append([]string{fmt.Sprintf("%d", v.Code), v.Name, v.Description, strings.Join(params, ", ")})
+		}
+
+		table.Render()
 	},
 }
 
 var setFxCmd = &cobra.Command{
-	Use:   "set <device>",
-	Short: "read raw bytes sent as packets from stdin and send them to rgb",
-	Args:  cobra.ExactArgs(1),
+	Use:   "set <selector> <effect_code> [<param>=<value>]*",
+	Short: "set the specified effect",
+	Args:  cobra.MinimumNArgs(2),
 	Run: func(cmd *cobra.Command, args []string) {
-		dev, err := client.Devices.Device(args[0])
+		effectIdx, err := strconv.Atoi(args[1])
 		if err != nil {
-			log.Panicln(err)
+			log.Panicln(aurora.Red(err.Error()))
 		}
 
-		reader := bufio.NewReader(os.Stdin)
-		finish := false
-		for finish {
-			packet, err := reader.ReadBytes('\n')
-			if err != nil {
-				if err == io.EOF {
-					finish = true
-				} else {
-					log.Panic(err)
-				}
+		params := map[string]string{}
+		for _, opt := range args[2:] {
+			parts := strings.Split(opt, "=")
+			if len(parts) != 2 {
+				log.Panicln("invalid parameter", opt)
 			}
 
-			if len(packet) <= 4 {
-				log.Printf("Invalid packet length: %d\n", len(packet))
-				continue
-			}
-
-			// -- send the packet
-			if err := dev.SendRgbRaw(packet); err != nil {
-				log.Println(err)
-			}
+			params[parts[0]] = parts[1]
 		}
+
+		fx, err := core.NewEffect(core.Effects[effectIdx], params)
+		if err != nil {
+			log.Panicln(aurora.Red(err))
+		}
+
+		devs, err := client.Devices.Select(args[0])
+		if err != nil {
+			log.Panicln(aurora.Red(err))
+		}
+
+		devs.Perform(func(dev *sdk.Device) {
+			if err := dev.SendFx(fx); err != nil {
+				fmt.Println(dev.Meta.MAC, ":\t", aurora.Red("ERR\t"), aurora.Red(err.Error()))
+				return
+			}
+
+			fmt.Println(dev.Meta.MAC, ":\t", aurora.Green("OK"))
+		})
 	},
 }
 
-//var rgbSetCmd = &cobra.Command{
-//	Use:   "set <device>",
-//	Short: "read raw bytes sent as packets from stdin and send them to rgb",
-//	Args:  cobra.MinimumNArgs(2),
-//	Run: func(cmd *cobra.Command, args []string) {
-//		dev, err := client.Devices.Device(args[0])
-//		if err != nil {
-//			log.Panicln(err)
-//		}
-//
-//		// -- construct the packet
-//		bytesPerPixel := len(args[0])
-//		if bytesPerPixel != 6 && bytesPerPixel != 8 {
-//			log.Fatalf("wrong number of pixel channels\n")
-//		}
-//
-//		buf := new(bytes.Buffer)
-//		binary.Write(buf, binary.LittleEndian, uint16(rgbOffset))
-//		binary.Write(buf, binary.LittleEndian, uint16(len(args)))
-//
-//		for idx, arg := range args {
-//			b, err := hex.DecodeString(arg)
-//			if err != nil {
-//				log.Fatalf("Data %s for pixel %d is invalid: %s\n", arg, idx, err)
-//			}
-//
-//			if len(b) != bytesPerPixel {
-//				log.Fatalf("Data %s for pixel %d is invalid: inconsistent number of bytes per pixel", arg, idx)
-//			}
-//
-//			buf.Write(b)
-//		}
-//
-//		// -- send the packet
-//		if err := dev.SendRgbRaw(buf.Bytes()); err != nil {
-//			log.Println(err)
-//		}
-//	},
-//}
-
 func init() {
-	//rgbCmd.AddCommand(rgbRawCmd)
-	//
-	//rgbSetCmd.LocalFlags().IntVarP(&rgbOffset, "offset", "o", 0, "the pixel offset")
-	//rgbCmd.AddCommand(rgbSetCmd)
-	//
-	//rootCmd.AddCommand(rgbCmd)
+	fxCmd.AddCommand(fxEnableCmd, listFxCmd, setFxCmd)
+	rootCmd.AddCommand(fxCmd)
 }

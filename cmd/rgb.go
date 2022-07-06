@@ -1,56 +1,18 @@
 package cmd
 
 import (
-	"bufio"
 	"fmt"
 	"github.com/area3001/goira/core"
 	"github.com/area3001/goira/sdk"
 	"github.com/logrusorgru/aurora/v3"
 	"github.com/spf13/cobra"
 	"image/color"
-	"io"
 	"log"
-	"os"
 )
 
 var rgbCmd = &cobra.Command{
 	Use:   "rgb",
 	Short: "Device RGB control",
-}
-
-var rgbRawCmd = &cobra.Command{
-	Use:   "raw <device>",
-	Short: "read raw bytes sent as packets from stdin and send them to rgb",
-	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		dev, err := client.Devices.Device(args[0])
-		if err != nil {
-			log.Panicln(err)
-		}
-
-		reader := bufio.NewReader(os.Stdin)
-		finish := false
-		for finish {
-			packet, err := reader.ReadBytes('\n')
-			if err != nil {
-				if err == io.EOF {
-					finish = true
-				} else {
-					log.Panic(err)
-				}
-			}
-
-			if len(packet) <= 4 {
-				log.Printf("Invalid packet length: %d\n", len(packet))
-				continue
-			}
-
-			// -- send the packet
-			if err := dev.SendRgbRaw(packet); err != nil {
-				log.Println(err)
-			}
-		}
-	},
 }
 
 var rgbSetCmd = &cobra.Command{
@@ -88,12 +50,32 @@ var rgbSetCmd = &cobra.Command{
 	},
 }
 
-func init() {
-	rgbCmd.AddCommand(rgbRawCmd)
+var rgbEnableCmd = &cobra.Command{
+	Use:   "enable <selector>",
+	Short: "Enable RGB mode for the selected devices",
+	Args:  cobra.MinimumNArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		devs, err := client.Devices.Select(args[0])
+		if err != nil {
+			log.Panicln(aurora.Red(err))
+		}
 
+		devs.Perform(func(dev *sdk.Device) {
+			if err := dev.SetMode(core.Modes[6]); err != nil {
+				fmt.Println(dev.Meta.MAC, ":\t", aurora.Red("ERR\t"), aurora.Red(err.Error()))
+				return
+			}
+
+			fmt.Println(dev.Meta.MAC, ":\t", aurora.Green("OK"))
+		})
+
+		_ = client.Devices.Sync()
+	},
+}
+
+func init() {
 	rgbSetCmd.LocalFlags().IntP("offset", "o", 0, "the pixel offset")
 
-	rgbCmd.AddCommand(rgbSetCmd)
-
+	rgbCmd.AddCommand(rgbEnableCmd, rgbSetCmd)
 	rootCmd.AddCommand(rgbCmd)
 }
