@@ -36,7 +36,7 @@ var configNameCmd = &cobra.Command{
 			log.Panicln(err)
 		}
 
-		if err := dev.SetConfig(args[1], args[2]); err != nil {
+		if err := dev.SetName(args[1]); err != nil {
 			log.Panicln(err)
 		}
 	},
