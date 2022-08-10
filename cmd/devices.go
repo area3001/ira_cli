@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"github.com/area3001/goira/devices"
 	"github.com/area3001/goira/sdk"
 	"github.com/logrusorgru/aurora/v3"
 	"github.com/mergestat/timediff"
@@ -9,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 	"log"
 	"os"
+	"strings"
 )
 
 var devicesCmd = &cobra.Command{
@@ -18,11 +20,48 @@ var devicesCmd = &cobra.Command{
 }
 
 var forgetCmd = &cobra.Command{
-	Use:   "forget <device>",
+	Use:   "forget <selector>",
 	Short: "Forget the device",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		devs, err := client.Devices.Select(args[0])
+		if err != nil {
+			log.Panicln(aurora.Red(err))
+		}
+
+		devs.Perform(func(dev *sdk.Device) {
+			if err := client.Devices.Forget(dev.Meta.MAC); err != nil {
+				fmt.Println(dev.Meta.MAC, ":\t", aurora.Red("ERR\t"), aurora.Red(err.Error()))
+				return
+			}
+
+			fmt.Println(dev.Meta.MAC, ":\t", aurora.Green("OK"))
+		})
+
 		return client.Devices.Forget(args[0])
+	},
+}
+
+var cleanCmd = &cobra.Command{
+	Use:   "clean",
+	Short: "!!! Clean Everything !!!",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		keys, err := client.Devices.Keys()
+		if err != nil {
+			log.Panicln(aurora.Red(err))
+		}
+
+		for _, key := range keys {
+			if err := client.Devices.Forget(key); err != nil {
+				fmt.Println(key, ":\t", aurora.Red("ERR\t"), aurora.Red(err.Error()))
+				continue
+			}
+
+			fmt.Println(key, ":\t", aurora.Green("OK"))
+		}
+
+		return nil
 	},
 }
 
@@ -67,21 +106,32 @@ var deviceListCmd = &cobra.Command{
 		}
 
 		table := tablewriter.NewWriter(os.Stdout)
-		table.SetHeader([]string{"Mac", "Name", "Mode", "Last Seen"})
+		table.SetAutoWrapText(false)
+		table.SetHeader([]string{"Mac", "Name", "Mode", "Version", "Last Seen", "Config"})
 
 		for _, v := range devs {
 			if v.Meta == nil {
 				continue
 			}
 
-			table.Append([]string{v.Meta.MAC, v.Meta.Name, v.Meta.Mode, timediff.TimeDiff(v.Meta.LastBeat)})
+			config := []string{
+				fmt.Sprintf("pixel_length=%d", v.Meta.Config[devices.PixelLengthVar]),
+				fmt.Sprintf("fx=%d", v.Meta.Config[devices.FxVar]),
+				fmt.Sprintf("fx_speed=%d", v.Meta.Config[devices.FxSpeedVar]),
+				fmt.Sprintf("fx_xfade=%d", v.Meta.Config[devices.FxXfadeVar]),
+				fmt.Sprintf("fx_fg=(%d, %d, %d)", v.Meta.Config[devices.FxForegroundRedVar], v.Meta.Config[devices.FxForegroundGreenVar], v.Meta.Config[devices.FxForegroundBlueVar]),
+				fmt.Sprintf("fx_bg=(%d, %d, %d)", v.Meta.Config[devices.FxBackgroundRedVar], v.Meta.Config[devices.FxBackgroundGreenVar], v.Meta.Config[devices.FxBackgroundBlueVar]),
+			}
+
+			table.Append([]string{v.Meta.MAC, v.Meta.Name, fmt.Sprintf("%d", v.Meta.Mode), fmt.Sprintf("%d", v.Meta.Version), timediff.TimeDiff(v.Meta.LastBeat), strings.Join(config, ", ")})
 		}
+		table.SetFooter([]string{"", "", "", "", "total", fmt.Sprintf("%d", len(devs))})
 		table.Render()
 	},
 }
 
 func init() {
-	devicesCmd.AddCommand(deviceListCmd, syncCmd, forgetCmd, resetCmd)
+	devicesCmd.AddCommand(deviceListCmd, syncCmd, forgetCmd, resetCmd, cleanCmd)
 
 	rootCmd.AddCommand(devicesCmd)
 }

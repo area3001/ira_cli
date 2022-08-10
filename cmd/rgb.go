@@ -50,6 +50,22 @@ var rgbSetCmd = &cobra.Command{
 	},
 }
 
+var rgbNiftyCmd = &cobra.Command{
+	Use:   "nifty <device>",
+	Short: "experimental",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		devs, err := client.Devices.Select(args[0])
+		if err != nil {
+			log.Panicln(aurora.Red(err))
+		}
+
+		devs.Perform(func(dev *sdk.Device) {
+
+		})
+	},
+}
+
 var rgbEnableCmd = &cobra.Command{
 	Use:   "enable <selector>",
 	Short: "Enable RGB mode for the selected devices",
